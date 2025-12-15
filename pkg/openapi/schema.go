@@ -1,5 +1,7 @@
 package openapi
 
+import "encoding/json"
+
 // Schema represents a JSON Schema object that describes the structure of data.
 // https://spec.openapis.org/oas/v3.1.0#schema-object
 type Schema struct {
@@ -96,6 +98,25 @@ func (s SchemaType) MarshalJSON() ([]byte, error) {
 	}
 	result += `]`
 	return []byte(result), nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+// Handles both string (OpenAPI 3.0) and array (OpenAPI 3.1+) formats.
+func (s *SchemaType) UnmarshalJSON(data []byte) error {
+	// Try string first (OpenAPI 3.0 format)
+	var str string
+	if err := json.Unmarshal(data, &str); err == nil {
+		*s = SchemaType{str}
+		return nil
+	}
+
+	// Try array (OpenAPI 3.1+ format)
+	var arr []string
+	if err := json.Unmarshal(data, &arr); err != nil {
+		return err
+	}
+	*s = arr
+	return nil
 }
 
 // MarshalYAML implements yaml.Marshaler.

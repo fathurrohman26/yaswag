@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/fathurrohman26/yaswag/internal/parser"
+	"github.com/fathurrohman26/yaswag/pkg/mcp"
 	"github.com/fathurrohman26/yaswag/pkg/openapi"
 	"github.com/fathurrohman26/yaswag/pkg/output"
 	"github.com/fathurrohman26/yaswag/pkg/swaggerui"
@@ -68,6 +69,8 @@ func (c *CLI) Run() error {
 		return c.runServe(args[1:])
 	case "editor":
 		return c.runEditor(args[1:])
+	case "mcp":
+		return c.runMCP(args[1:])
 	}
 
 	return fmt.Errorf("unknown command: %s", cmd)
@@ -380,6 +383,63 @@ func (c *CLI) runEditor(args []string) error {
 	return server.Serve()
 }
 
+func (c *CLI) runMCP(args []string) error {
+	fs := flag.NewFlagSet("mcp", flag.ExitOnError)
+	showHelp := fs.Bool("help", false, "Show help for mcp command")
+	skipValidation := fs.Bool("skip-validation", false, "Skip spec validation before starting")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *showHelp {
+		fmt.Println(c.MCPHelp())
+		return nil
+	}
+
+	// Remaining args are spec file paths
+	specPaths := fs.Args()
+
+	if len(specPaths) == 0 {
+		return fmt.Errorf("no specification provided: yaswag mcp <spec-file> [spec-file...]")
+	}
+
+	// Validate spec files before starting
+	if !*skipValidation {
+		result, err := mcp.ValidateSpecFile(specPaths[0])
+		if err != nil {
+			return fmt.Errorf("validation error: %w", err)
+		}
+		c.printMCPValidationResult(result)
+		if !result.Valid {
+			return fmt.Errorf("spec validation failed")
+		}
+	}
+
+	server := mcp.NewServer(specPaths)
+	return server.Run()
+}
+
+func (c *CLI) printMCPValidationResult(result *validator.ValidationResult) {
+	if result.Valid && len(result.Warnings) == 0 {
+		fmt.Fprintln(os.Stderr, "Spec validation: OK")
+		return
+	}
+
+	if !result.Valid {
+		fmt.Fprintln(os.Stderr, "Spec validation: FAILED")
+		for _, e := range result.Errors {
+			fmt.Fprintf(os.Stderr, "  ERROR: %s\n", e.Message)
+		}
+	} else {
+		fmt.Fprintln(os.Stderr, "Spec validation: OK (with warnings)")
+	}
+
+	for _, w := range result.Warnings {
+		fmt.Fprintf(os.Stderr, "  WARNING: %s\n", w.Message)
+	}
+}
+
 func (c *CLI) Version() string {
 	return fmt.Sprintf("yaswag version %s (commit: %s, built: %s)", c.info.version, c.info.commit, c.info.date)
 }
@@ -396,6 +456,7 @@ func (c *CLI) Help() string {
 	help.WriteString("  format      Format an OpenAPI specification file\n")
 	help.WriteString("  serve       Serve OpenAPI specification with Swagger UI\n")
 	help.WriteString("  editor      Launch Swagger Editor for creating/editing specifications\n")
+	help.WriteString("  mcp         Start MCP server for AI assistant integration\n")
 	help.WriteString("  version     Show version information\n")
 	help.WriteString("  help        Show this help message\n\n")
 	help.WriteString("Use 'yaswag [command] --help' for more information about a command.\n")
@@ -493,6 +554,47 @@ func (c *CLI) EditorHelp() string {
 	help.WriteString("  yaswag editor --input https://petstore3.swagger.io/api/v3/openapi.json\n")
 	help.WriteString("  yaswag generate --source ./api | yaswag editor\n")
 	help.WriteString("  cat swagger.yaml | yaswag editor\n")
+	return help.String()
+}
+
+func (c *CLI) MCPHelp() string {
+	help := strings.Builder{}
+	help.WriteString("Start MCP (Model Context Protocol) server for AI assistant integration.\n\n")
+	help.WriteString("The MCP server enables AI assistants like Claude to interact with OpenAPI\n")
+	help.WriteString("specifications through semantic search, schema exploration, and validation.\n\n")
+	help.WriteString("Usage:\n")
+	help.WriteString("  yaswag mcp [options] <spec-file> [spec-file...]\n\n")
+	help.WriteString("Options:\n")
+	help.WriteString("  --skip-validation Skip spec validation before starting the server\n")
+	help.WriteString("  --help            Show this help message\n\n")
+	help.WriteString("Note: MCP mode requires spec files as arguments. Stdin piping is not\n")
+	help.WriteString("supported because stdin is reserved for JSON-RPC communication.\n\n")
+	help.WriteString("Available Tools:\n")
+	help.WriteString("  search_endpoints  Search for endpoints using natural language\n")
+	help.WriteString("  list_endpoints    List all endpoints with optional filtering\n")
+	help.WriteString("  get_endpoint      Get detailed endpoint information\n")
+	help.WriteString("  search_schemas    Search for schema definitions\n")
+	help.WriteString("  get_schema        Get detailed schema definition\n")
+	help.WriteString("  validate_spec     Validate the OpenAPI specification\n")
+	help.WriteString("  get_spec_info     Get general specification information\n")
+	help.WriteString("  generate_example  Generate example request/response data\n")
+	help.WriteString("  find_related      Find related endpoints\n")
+	help.WriteString("  list_tags         List all tags with endpoint counts\n")
+	help.WriteString("  analyze_security  Analyze security requirements\n\n")
+	help.WriteString("Claude Code Configuration:\n")
+	help.WriteString("  Add to your .claude/settings.json:\n\n")
+	help.WriteString("  {\n")
+	help.WriteString("    \"mcpServers\": {\n")
+	help.WriteString("      \"yaswag\": {\n")
+	help.WriteString("        \"command\": \"yaswag\",\n")
+	help.WriteString("        \"args\": [\"mcp\", \"./openapi.json\"]\n")
+	help.WriteString("      }\n")
+	help.WriteString("    }\n")
+	help.WriteString("  }\n\n")
+	help.WriteString("Examples:\n")
+	help.WriteString("  yaswag mcp ./openapi.json\n")
+	help.WriteString("  yaswag mcp ./api/swagger.yaml ./api/openapi.json\n")
+	help.WriteString("  yaswag mcp --skip-validation ./openapi.json\n")
 	return help.String()
 }
 

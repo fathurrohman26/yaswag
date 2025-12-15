@@ -137,6 +137,13 @@ linters:
           - gocyclo
           - gosec
 
+      # Allow complexity in MCP tools (each tool handles multiple scenarios)
+      - path: pkg/mcp/
+        linters:
+          - gocognit
+          - gocyclo
+          - gocritic
+
       # Allow exhaustive switch in parser (many annotation types)
       - path: internal/parser/
         linters:

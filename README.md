@@ -18,6 +18,7 @@ YaSwag is a tool for generating OpenAPI 3.x specifications from Go source code u
 - Generate OpenAPI 3.x specifications (YAML/JSON) from Go source code with custom annotations.
 - Built-in Swagger UI for serving and visualizing OpenAPI documentation.
 - Built-in Swagger Editor for creating and editing OpenAPI specifications.
+- MCP (Model Context Protocol) server for AI assistant integration with semantic search.
 - Command-line interface (CLI) for generating, validating, formatting, serving, and editing OpenAPI specs.
 - Support for API-level metadata, operations, parameters, request bodies, responses, security schemes, and data models.
 - Easy-to-read and write annotation syntax with `!` prefix.
@@ -63,6 +64,7 @@ yaswag validate - Validates your OpenAPI specification file.
 yaswag format   - Formats your OpenAPI specification file.
 yaswag serve    - Serves the OpenAPI documentation via Swagger UI.
 yaswag editor   - Launch Swagger Editor for creating/editing specifications.
+yaswag mcp      - Start MCP server for AI assistant integration.
 yaswag help     - Displays help information about YaSwag commands.
 yaswag version  - Displays the current version of YaSwag.
 ```
@@ -147,6 +149,52 @@ yaswag generate --source ./path/to/your/project | yaswag editor
 cat swagger.yaml | yaswag editor
 ```
 
+### MCP (AI Assistant Integration)
+
+YaSwag includes a Model Context Protocol (MCP) server that enables AI assistants like Claude to interact with your OpenAPI specifications through semantic search, schema exploration, and validation.
+
+```bash
+# start MCP server with a spec file
+yaswag mcp ./swagger.yaml
+
+# start MCP server with multiple spec files
+yaswag mcp ./api/v1/openapi.yaml ./api/v2/openapi.yaml
+
+# skip validation before starting
+yaswag mcp --skip-validation ./swagger.yaml
+```
+
+#### Claude Code Configuration
+
+Add to your `.claude/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "yaswag": {
+      "command": "yaswag",
+      "args": ["mcp", "./openapi.json"]
+    }
+  }
+}
+```
+
+#### Available MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `search_endpoints` | Search for endpoints using natural language |
+| `list_endpoints` | List all endpoints with optional filtering |
+| `get_endpoint` | Get detailed endpoint information |
+| `search_schemas` | Search for schema definitions |
+| `get_schema` | Get detailed schema definition |
+| `validate_spec` | Validate the OpenAPI specification |
+| `get_spec_info` | Get general specification information |
+| `generate_example` | Generate example request/response data |
+| `find_related` | Find related endpoints |
+| `list_tags` | List all tags with endpoint counts |
+| `analyze_security` | Analyze security requirements |
+
 ### Help
 
 ```bash
@@ -159,6 +207,7 @@ yaswag validate --help
 yaswag format --help
 yaswag serve --help
 yaswag editor --help
+yaswag mcp --help
 
 # show version
 yaswag version
