@@ -67,6 +67,9 @@ release: lint test gocyclo fmt vet release-check release-snapshot release-push
 
 release-push:
 	@echo "Pushing release..."
+	@if [ -n "$(YASWAG_RELEASER_TOKEN)" ]; then \
+		export GITHUB_TOKEN=$(YASWAG_RELEASER_TOKEN); \
+	fi
 	@if [ -z "$(GITHUB_TOKEN)" ]; then \
 		echo "GITHUB_TOKEN is not set! Please set it to proceed with the release."; \
 		exit 1; \
