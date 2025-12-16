@@ -285,6 +285,71 @@ func getInt(req mcp.CallToolRequest, name string, defaultVal int) int {
 	return defaultVal
 }
 
+// operationEntry represents a method-operation pair
+type operationEntry struct {
+	Method string
+	Op     *openapi.Operation
+}
+
+// getOperations returns all non-nil operations from a PathItem
+func getOperations(pathItem *openapi.PathItem) []operationEntry {
+	entries := []operationEntry{
+		{"GET", pathItem.Get},
+		{"POST", pathItem.Post},
+		{"PUT", pathItem.Put},
+		{"DELETE", pathItem.Delete},
+		{"PATCH", pathItem.Patch},
+		{"HEAD", pathItem.Head},
+		{"OPTIONS", pathItem.Options},
+	}
+	var result []operationEntry
+	for _, e := range entries {
+		if e.Op != nil {
+			result = append(result, e)
+		}
+	}
+	return result
+}
+
+// getOperationsWithoutHeadOptions returns operations excluding HEAD and OPTIONS
+func getOperationsWithoutHeadOptions(pathItem *openapi.PathItem) []operationEntry {
+	entries := []operationEntry{
+		{"GET", pathItem.Get},
+		{"POST", pathItem.Post},
+		{"PUT", pathItem.Put},
+		{"DELETE", pathItem.Delete},
+		{"PATCH", pathItem.Patch},
+	}
+	var result []operationEntry
+	for _, e := range entries {
+		if e.Op != nil {
+			result = append(result, e)
+		}
+	}
+	return result
+}
+
+// filterOperation checks if an operation matches the given filters
+func filterOperation(op *openapi.Operation, methodFilter, tagFilter, method string) bool {
+	if methodFilter != "" && !strings.EqualFold(method, methodFilter) {
+		return false
+	}
+	if tagFilter != "" && !hasTag(op.Tags, tagFilter) {
+		return false
+	}
+	return true
+}
+
+// searchResult represents a search result with relevance score
+type searchResult struct {
+	Path        string   `json:"path"`
+	Method      string   `json:"method"`
+	Summary     string   `json:"summary"`
+	Description string   `json:"description,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+	Score       float64  `json:"relevance_score"`
+}
+
 // handleSearchEndpoints implements semantic search for endpoints
 func (s *Server) handleSearchEndpoints(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	query, _ := req.RequireString("query")
@@ -297,56 +362,8 @@ func (s *Server) handleSearchEndpoints(ctx context.Context, req mcp.CallToolRequ
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
-	type result struct {
-		Path        string   `json:"path"`
-		Method      string   `json:"method"`
-		Summary     string   `json:"summary"`
-		Description string   `json:"description,omitempty"`
-		Tags        []string `json:"tags,omitempty"`
-		Score       float64  `json:"relevance_score"`
-	}
-
-	var results []result
-	queryLower := strings.ToLower(query)
-	queryTerms := strings.Fields(queryLower)
-
-	for path, pathItem := range doc.Paths {
-		operations := map[string]*openapi.Operation{
-			"GET":     pathItem.Get,
-			"POST":    pathItem.Post,
-			"PUT":     pathItem.Put,
-			"DELETE":  pathItem.Delete,
-			"PATCH":   pathItem.Patch,
-			"HEAD":    pathItem.Head,
-			"OPTIONS": pathItem.Options,
-		}
-
-		for method, op := range operations {
-			if op == nil {
-				continue
-			}
-
-			if methodFilter != "" && !strings.EqualFold(method, methodFilter) {
-				continue
-			}
-
-			if tagFilter != "" && !hasTag(op.Tags, tagFilter) {
-				continue
-			}
-
-			score := calculateRelevanceScore(queryTerms, path, op)
-			if score > 0 {
-				results = append(results, result{
-					Path:        path,
-					Method:      method,
-					Summary:     op.Summary,
-					Description: op.Description,
-					Tags:        op.Tags,
-					Score:       score,
-				})
-			}
-		}
-	}
+	queryTerms := strings.Fields(strings.ToLower(query))
+	results := searchEndpointsInDoc(doc, queryTerms, methodFilter, tagFilter)
 
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].Score > results[j].Score
@@ -362,6 +379,30 @@ func (s *Server) handleSearchEndpoints(ctx context.Context, req mcp.CallToolRequ
 
 	output, _ := json.MarshalIndent(results, "", "  ")
 	return mcp.NewToolResultText(fmt.Sprintf("Found %d matching endpoints:\n\n%s", len(results), string(output))), nil
+}
+
+// searchEndpointsInDoc searches for endpoints matching the query terms
+func searchEndpointsInDoc(doc *openapi.Document, queryTerms []string, methodFilter, tagFilter string) []searchResult {
+	var results []searchResult
+	for path, pathItem := range doc.Paths {
+		for _, entry := range getOperations(pathItem) {
+			if !filterOperation(entry.Op, methodFilter, tagFilter, entry.Method) {
+				continue
+			}
+			score := calculateRelevanceScore(queryTerms, path, entry.Op)
+			if score > 0 {
+				results = append(results, searchResult{
+					Path:        path,
+					Method:      entry.Method,
+					Summary:     entry.Op.Summary,
+					Description: entry.Op.Description,
+					Tags:        entry.Op.Tags,
+					Score:       score,
+				})
+			}
+		}
+	}
+	return results
 }
 
 // hasTag checks if a tag exists in the list (case-insensitive)
@@ -405,6 +446,14 @@ func calculateRelevanceScore(queryTerms []string, path string, op *openapi.Opera
 	return score
 }
 
+// endpointInfo represents basic endpoint information
+type endpointInfo struct {
+	Path    string   `json:"path"`
+	Method  string   `json:"method"`
+	Summary string   `json:"summary"`
+	Tags    []string `json:"tags,omitempty"`
+}
+
 // handleListEndpoints lists all endpoints with optional filtering
 func (s *Server) handleListEndpoints(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	methodFilter := getString(req, "method", "")
@@ -416,58 +465,8 @@ func (s *Server) handleListEndpoints(ctx context.Context, req mcp.CallToolReques
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
-	type endpoint struct {
-		Path    string   `json:"path"`
-		Method  string   `json:"method"`
-		Summary string   `json:"summary"`
-		Tags    []string `json:"tags,omitempty"`
-	}
-
-	var endpoints []endpoint
-
-	for path, pathItem := range doc.Paths {
-		if pathPattern != "" && !matchPathPattern(path, pathPattern) {
-			continue
-		}
-
-		operations := map[string]*openapi.Operation{
-			"GET":     pathItem.Get,
-			"POST":    pathItem.Post,
-			"PUT":     pathItem.Put,
-			"DELETE":  pathItem.Delete,
-			"PATCH":   pathItem.Patch,
-			"HEAD":    pathItem.Head,
-			"OPTIONS": pathItem.Options,
-		}
-
-		for method, op := range operations {
-			if op == nil {
-				continue
-			}
-
-			if methodFilter != "" && !strings.EqualFold(method, methodFilter) {
-				continue
-			}
-
-			if tagFilter != "" && !hasTag(op.Tags, tagFilter) {
-				continue
-			}
-
-			endpoints = append(endpoints, endpoint{
-				Path:    path,
-				Method:  method,
-				Summary: op.Summary,
-				Tags:    op.Tags,
-			})
-		}
-	}
-
-	sort.Slice(endpoints, func(i, j int) bool {
-		if endpoints[i].Path == endpoints[j].Path {
-			return endpoints[i].Method < endpoints[j].Method
-		}
-		return endpoints[i].Path < endpoints[j].Path
-	})
+	endpoints := listEndpointsInDoc(doc, methodFilter, tagFilter, pathPattern)
+	sortEndpoints(endpoints)
 
 	if len(endpoints) == 0 {
 		return mcp.NewToolResultText("No endpoints found matching the filters."), nil
@@ -475,6 +474,38 @@ func (s *Server) handleListEndpoints(ctx context.Context, req mcp.CallToolReques
 
 	output, _ := json.MarshalIndent(endpoints, "", "  ")
 	return mcp.NewToolResultText(fmt.Sprintf("Found %d endpoints:\n\n%s", len(endpoints), string(output))), nil
+}
+
+// listEndpointsInDoc collects endpoints from the document with filtering
+func listEndpointsInDoc(doc *openapi.Document, methodFilter, tagFilter, pathPattern string) []endpointInfo {
+	var endpoints []endpointInfo
+	for path, pathItem := range doc.Paths {
+		if pathPattern != "" && !matchPathPattern(path, pathPattern) {
+			continue
+		}
+		for _, entry := range getOperations(pathItem) {
+			if !filterOperation(entry.Op, methodFilter, tagFilter, entry.Method) {
+				continue
+			}
+			endpoints = append(endpoints, endpointInfo{
+				Path:    path,
+				Method:  entry.Method,
+				Summary: entry.Op.Summary,
+				Tags:    entry.Op.Tags,
+			})
+		}
+	}
+	return endpoints
+}
+
+// sortEndpoints sorts endpoints by path and method
+func sortEndpoints(endpoints []endpointInfo) {
+	sort.Slice(endpoints, func(i, j int) bool {
+		if endpoints[i].Path == endpoints[j].Path {
+			return endpoints[i].Method < endpoints[j].Method
+		}
+		return endpoints[i].Path < endpoints[j].Path
+	})
 }
 
 // matchPathPattern checks if a path matches a pattern with wildcards
@@ -563,6 +594,14 @@ func getOperation(pathItem *openapi.PathItem, method string) *openapi.Operation 
 	}
 }
 
+// schemaSearchResult represents a schema search result
+type schemaSearchResult struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	Type        string   `json:"type,omitempty"`
+	Properties  []string `json:"properties,omitempty"`
+}
+
 // handleSearchSchemas searches for schema definitions
 func (s *Server) handleSearchSchemas(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	query, _ := req.RequireString("query")
@@ -577,46 +616,7 @@ func (s *Server) handleSearchSchemas(ctx context.Context, req mcp.CallToolReques
 		return mcp.NewToolResultText("No schemas defined in the specification."), nil
 	}
 
-	type schemaResult struct {
-		Name        string   `json:"name"`
-		Description string   `json:"description,omitempty"`
-		Type        string   `json:"type,omitempty"`
-		Properties  []string `json:"properties,omitempty"`
-	}
-
-	var results []schemaResult
-	queryLower := strings.ToLower(query)
-
-	for name, schema := range doc.Components.Schemas {
-		nameLower := strings.ToLower(name)
-		descLower := strings.ToLower(schema.Description)
-
-		if !strings.Contains(nameLower, queryLower) && !strings.Contains(descLower, queryLower) {
-			continue
-		}
-
-		if hasProperty != "" && !schemaHasProperty(schema, hasProperty) {
-			continue
-		}
-
-		var propNames []string
-		for propName := range schema.Properties {
-			propNames = append(propNames, propName)
-		}
-		sort.Strings(propNames)
-
-		schemaType := ""
-		if len(schema.Type) > 0 {
-			schemaType = schema.Type[0]
-		}
-
-		results = append(results, schemaResult{
-			Name:        name,
-			Description: schema.Description,
-			Type:        schemaType,
-			Properties:  propNames,
-		})
-	}
+	results := searchSchemasInDoc(doc.Components.Schemas, query, hasProperty)
 
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].Name < results[j].Name
@@ -628,6 +628,60 @@ func (s *Server) handleSearchSchemas(ctx context.Context, req mcp.CallToolReques
 
 	output, _ := json.MarshalIndent(results, "", "  ")
 	return mcp.NewToolResultText(fmt.Sprintf("Found %d schemas:\n\n%s", len(results), string(output))), nil
+}
+
+// searchSchemasInDoc searches schemas matching the query
+func searchSchemasInDoc(schemas map[string]*openapi.Schema, query, hasProperty string) []schemaSearchResult {
+	var results []schemaSearchResult
+	queryLower := strings.ToLower(query)
+
+	for name, schema := range schemas {
+		if !schemaMatchesQuery(name, schema, queryLower) {
+			continue
+		}
+		if hasProperty != "" && !schemaHasProperty(schema, hasProperty) {
+			continue
+		}
+		results = append(results, buildSchemaResult(name, schema))
+	}
+	return results
+}
+
+// schemaMatchesQuery checks if a schema matches the search query
+func schemaMatchesQuery(name string, schema *openapi.Schema, queryLower string) bool {
+	nameLower := strings.ToLower(name)
+	descLower := strings.ToLower(schema.Description)
+	return strings.Contains(nameLower, queryLower) || strings.Contains(descLower, queryLower)
+}
+
+// buildSchemaResult builds a schema search result
+func buildSchemaResult(name string, schema *openapi.Schema) schemaSearchResult {
+	propNames := getSortedPropertyNames(schema)
+	schemaType := getSchemaType(schema)
+	return schemaSearchResult{
+		Name:        name,
+		Description: schema.Description,
+		Type:        schemaType,
+		Properties:  propNames,
+	}
+}
+
+// getSortedPropertyNames returns sorted property names from a schema
+func getSortedPropertyNames(schema *openapi.Schema) []string {
+	var propNames []string
+	for propName := range schema.Properties {
+		propNames = append(propNames, propName)
+	}
+	sort.Strings(propNames)
+	return propNames
+}
+
+// getSchemaType returns the first type of a schema or empty string
+func getSchemaType(schema *openapi.Schema) string {
+	if len(schema.Type) > 0 {
+		return schema.Type[0]
+	}
+	return ""
 }
 
 // schemaHasProperty checks if a schema has a specific property
@@ -794,29 +848,9 @@ func (s *Server) handleGenerateExample(ctx context.Context, req mcp.CallToolRequ
 		return mcp.NewToolResultText(fmt.Sprintf("Method %s not found for path %s", method, path)), nil
 	}
 
-	var example any
-
-	if exampleType == "request" {
-		if op.RequestBody == nil {
-			return mcp.NewToolResultText("No request body defined for this endpoint."), nil
-		}
-		for _, mediaType := range op.RequestBody.Content {
-			if mediaType.Schema != nil {
-				example = generateSchemaExample(mediaType.Schema, doc)
-				break
-			}
-		}
-	} else {
-		resp, ok := op.Responses[statusCode]
-		if !ok {
-			return mcp.NewToolResultText(fmt.Sprintf("No response defined for status code %s", statusCode)), nil
-		}
-		for _, mediaType := range resp.Content {
-			if mediaType.Schema != nil {
-				example = generateSchemaExample(mediaType.Schema, doc)
-				break
-			}
-		}
+	example, errMsg := generateEndpointExample(op, exampleType, statusCode, doc)
+	if errMsg != "" {
+		return mcp.NewToolResultText(errMsg), nil
 	}
 
 	if example == nil {
@@ -827,20 +861,49 @@ func (s *Server) handleGenerateExample(ctx context.Context, req mcp.CallToolRequ
 	return mcp.NewToolResultText(fmt.Sprintf("Generated %s example for %s %s:\n\n%s", exampleType, method, path, string(output))), nil
 }
 
+// generateEndpointExample generates example for request or response
+func generateEndpointExample(op *openapi.Operation, exampleType, statusCode string, doc *openapi.Document) (any, string) {
+	if exampleType == "request" {
+		return generateRequestExample(op, doc)
+	}
+	return generateResponseExample(op, statusCode, doc)
+}
+
+// generateRequestExample generates example from request body
+func generateRequestExample(op *openapi.Operation, doc *openapi.Document) (any, string) {
+	if op.RequestBody == nil {
+		return nil, "No request body defined for this endpoint."
+	}
+	return extractExampleFromContent(op.RequestBody.Content, doc), ""
+}
+
+// generateResponseExample generates example from response
+func generateResponseExample(op *openapi.Operation, statusCode string, doc *openapi.Document) (any, string) {
+	resp, ok := op.Responses[statusCode]
+	if !ok {
+		return nil, fmt.Sprintf("No response defined for status code %s", statusCode)
+	}
+	return extractExampleFromContent(resp.Content, doc), ""
+}
+
+// extractExampleFromContent extracts example from content map
+func extractExampleFromContent(content map[string]openapi.MediaType, doc *openapi.Document) any {
+	for _, mediaType := range content {
+		if mediaType.Schema != nil {
+			return generateSchemaExample(mediaType.Schema, doc)
+		}
+	}
+	return nil
+}
+
 // generateSchemaExample generates example data from a schema
 func generateSchemaExample(schema *openapi.Schema, doc *openapi.Document) any {
 	if schema == nil {
 		return nil
 	}
 
-	if schema.Ref != "" {
-		refName := strings.TrimPrefix(schema.Ref, "#/components/schemas/")
-		if doc.Components != nil && doc.Components.Schemas != nil {
-			if refSchema, ok := doc.Components.Schemas[refName]; ok {
-				return generateSchemaExample(refSchema, doc)
-			}
-		}
-		return nil
+	if resolved := resolveSchemaRef(schema, doc); resolved != nil {
+		return generateSchemaExample(resolved, doc)
 	}
 
 	if schema.Example != nil {
@@ -851,7 +914,26 @@ func generateSchemaExample(schema *openapi.Schema, doc *openapi.Document) any {
 		return nil
 	}
 
-	switch schema.Type[0] {
+	return generateExampleByType(schema.Type[0], schema, doc)
+}
+
+// resolveSchemaRef resolves a $ref to the actual schema, returns nil if not a ref
+func resolveSchemaRef(schema *openapi.Schema, doc *openapi.Document) *openapi.Schema {
+	if schema.Ref == "" {
+		return nil
+	}
+	refName := strings.TrimPrefix(schema.Ref, "#/components/schemas/")
+	if doc.Components != nil && doc.Components.Schemas != nil {
+		if refSchema, ok := doc.Components.Schemas[refName]; ok {
+			return refSchema
+		}
+	}
+	return nil
+}
+
+// generateExampleByType generates an example value based on schema type
+func generateExampleByType(schemaType string, schema *openapi.Schema, doc *openapi.Document) any {
+	switch schemaType {
 	case "string":
 		return generateStringExample(schema)
 	case "integer":
@@ -861,19 +943,29 @@ func generateSchemaExample(schema *openapi.Schema, doc *openapi.Document) any {
 	case "boolean":
 		return true
 	case "array":
-		if schema.Items != nil {
-			return []any{generateSchemaExample(schema.Items, doc)}
-		}
-		return []any{}
+		return generateArrayExample(schema, doc)
 	case "object":
-		obj := make(map[string]any)
-		for propName, propSchema := range schema.Properties {
-			obj[propName] = generateSchemaExample(propSchema, doc)
-		}
-		return obj
+		return generateObjectExample(schema, doc)
 	default:
 		return nil
 	}
+}
+
+// generateArrayExample generates an example array
+func generateArrayExample(schema *openapi.Schema, doc *openapi.Document) []any {
+	if schema.Items != nil {
+		return []any{generateSchemaExample(schema.Items, doc)}
+	}
+	return []any{}
+}
+
+// generateObjectExample generates an example object
+func generateObjectExample(schema *openapi.Schema, doc *openapi.Document) map[string]any {
+	obj := make(map[string]any)
+	for propName, propSchema := range schema.Properties {
+		obj[propName] = generateSchemaExample(propSchema, doc)
+	}
+	return obj
 }
 
 // generateStringExample generates example string based on format
@@ -899,6 +991,13 @@ func generateStringExample(schema *openapi.Schema) string {
 	}
 }
 
+// relatedEndpoint represents a related endpoint
+type relatedEndpoint struct {
+	Path    string `json:"path"`
+	Method  string `json:"method"`
+	Summary string `json:"summary,omitempty"`
+}
+
 // handleFindRelated finds related endpoints
 func (s *Server) handleFindRelated(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	path, _ := req.RequireString("path")
@@ -908,54 +1007,13 @@ func (s *Server) handleFindRelated(ctx context.Context, req mcp.CallToolRequest)
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
-	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) == 0 {
+	resource := extractResource(path)
+	if resource == "" {
 		return mcp.NewToolResultText("Invalid path"), nil
 	}
 
-	resource := parts[0]
-
-	type relatedEndpoint struct {
-		Path    string `json:"path"`
-		Method  string `json:"method"`
-		Summary string `json:"summary,omitempty"`
-	}
-
-	var related []relatedEndpoint
-
-	for p, pathItem := range doc.Paths {
-		if p == path {
-			continue
-		}
-
-		pParts := strings.Split(strings.Trim(p, "/"), "/")
-		if len(pParts) > 0 && pParts[0] == resource {
-			operations := map[string]*openapi.Operation{
-				"GET":    pathItem.Get,
-				"POST":   pathItem.Post,
-				"PUT":    pathItem.Put,
-				"DELETE": pathItem.Delete,
-				"PATCH":  pathItem.Patch,
-			}
-
-			for method, op := range operations {
-				if op != nil {
-					related = append(related, relatedEndpoint{
-						Path:    p,
-						Method:  method,
-						Summary: op.Summary,
-					})
-				}
-			}
-		}
-	}
-
-	sort.Slice(related, func(i, j int) bool {
-		if related[i].Path == related[j].Path {
-			return related[i].Method < related[j].Method
-		}
-		return related[i].Path < related[j].Path
-	})
+	related := findRelatedEndpoints(doc, path, resource)
+	sortRelatedEndpoints(related)
 
 	if len(related) == 0 {
 		return mcp.NewToolResultText("No related endpoints found."), nil
@@ -963,6 +1021,49 @@ func (s *Server) handleFindRelated(ctx context.Context, req mcp.CallToolRequest)
 
 	output, _ := json.MarshalIndent(related, "", "  ")
 	return mcp.NewToolResultText(fmt.Sprintf("Found %d related endpoints:\n\n%s", len(related), string(output))), nil
+}
+
+// extractResource extracts the resource name from a path
+func extractResource(path string) string {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) == 0 {
+		return ""
+	}
+	return parts[0]
+}
+
+// findRelatedEndpoints finds endpoints with the same resource
+func findRelatedEndpoints(doc *openapi.Document, currentPath, resource string) []relatedEndpoint {
+	var related []relatedEndpoint
+	for p, pathItem := range doc.Paths {
+		if p == currentPath || !pathHasResource(p, resource) {
+			continue
+		}
+		for _, entry := range getOperationsWithoutHeadOptions(pathItem) {
+			related = append(related, relatedEndpoint{
+				Path:    p,
+				Method:  entry.Method,
+				Summary: entry.Op.Summary,
+			})
+		}
+	}
+	return related
+}
+
+// pathHasResource checks if a path starts with the given resource
+func pathHasResource(path, resource string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	return len(parts) > 0 && parts[0] == resource
+}
+
+// sortRelatedEndpoints sorts related endpoints by path and method
+func sortRelatedEndpoints(related []relatedEndpoint) {
+	sort.Slice(related, func(i, j int) bool {
+		if related[i].Path == related[j].Path {
+			return related[i].Method < related[j].Method
+		}
+		return related[i].Path < related[j].Path
+	})
 }
 
 // handleListTags lists all tags with descriptions
@@ -1024,6 +1125,15 @@ func (s *Server) handleListTags(ctx context.Context, req mcp.CallToolRequest) (*
 	return mcp.NewToolResultText(string(output)), nil
 }
 
+// securityAnalysis represents the result of security analysis
+type securityAnalysis struct {
+	GlobalSecurity       []openapi.SecurityRequirement      `json:"global_security,omitempty"`
+	SecuritySchemes      map[string]*openapi.SecurityScheme `json:"security_schemes,omitempty"`
+	ProtectedEndpoints   int                                `json:"protected_endpoints"`
+	UnprotectedEndpoints int                                `json:"unprotected_endpoints"`
+	EndpointsBySecurity  map[string][]string                `json:"endpoints_by_security"`
+}
+
 // handleAnalyzeSecurity analyzes security requirements
 func (s *Server) handleAnalyzeSecurity(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	doc, err := s.loadSpec()
@@ -1031,14 +1141,13 @@ func (s *Server) handleAnalyzeSecurity(ctx context.Context, req mcp.CallToolRequ
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
-	type securityAnalysis struct {
-		GlobalSecurity       []openapi.SecurityRequirement      `json:"global_security,omitempty"`
-		SecuritySchemes      map[string]*openapi.SecurityScheme `json:"security_schemes,omitempty"`
-		ProtectedEndpoints   int                                `json:"protected_endpoints"`
-		UnprotectedEndpoints int                                `json:"unprotected_endpoints"`
-		EndpointsBySecurity  map[string][]string                `json:"endpoints_by_security"`
-	}
+	analysis := analyzeDocSecurity(doc)
+	output, _ := json.MarshalIndent(analysis, "", "  ")
+	return mcp.NewToolResultText(string(output)), nil
+}
 
+// analyzeDocSecurity performs security analysis on a document
+func analyzeDocSecurity(doc *openapi.Document) securityAnalysis {
 	analysis := securityAnalysis{
 		GlobalSecurity:      doc.Security,
 		EndpointsBySecurity: make(map[string][]string),
@@ -1051,46 +1160,35 @@ func (s *Server) handleAnalyzeSecurity(ctx context.Context, req mcp.CallToolRequ
 	hasGlobalSecurity := len(doc.Security) > 0
 
 	for path, pathItem := range doc.Paths {
-		operations := map[string]*openapi.Operation{
-			"GET":    pathItem.Get,
-			"POST":   pathItem.Post,
-			"PUT":    pathItem.Put,
-			"DELETE": pathItem.Delete,
-			"PATCH":  pathItem.Patch,
-		}
-
-		for method, op := range operations {
-			if op == nil {
-				continue
-			}
-
-			endpoint := fmt.Sprintf("%s %s", method, path)
-
-			switch {
-			case len(op.Security) > 0:
-				analysis.ProtectedEndpoints++
-				for _, sec := range op.Security {
-					for schemeName := range sec {
-						analysis.EndpointsBySecurity[schemeName] = append(
-							analysis.EndpointsBySecurity[schemeName], endpoint)
-					}
-				}
-			case hasGlobalSecurity:
-				analysis.ProtectedEndpoints++
-				for _, sec := range doc.Security {
-					for schemeName := range sec {
-						analysis.EndpointsBySecurity[schemeName] = append(
-							analysis.EndpointsBySecurity[schemeName], endpoint)
-					}
-				}
-			default:
-				analysis.UnprotectedEndpoints++
-				analysis.EndpointsBySecurity["none"] = append(
-					analysis.EndpointsBySecurity["none"], endpoint)
-			}
+		for _, entry := range getOperationsWithoutHeadOptions(pathItem) {
+			endpoint := fmt.Sprintf("%s %s", entry.Method, path)
+			analyzeEndpointSecurity(&analysis, entry.Op, endpoint, doc.Security, hasGlobalSecurity)
 		}
 	}
 
-	output, _ := json.MarshalIndent(analysis, "", "  ")
-	return mcp.NewToolResultText(string(output)), nil
+	return analysis
+}
+
+// analyzeEndpointSecurity analyzes security for a single endpoint
+func analyzeEndpointSecurity(analysis *securityAnalysis, op *openapi.Operation, endpoint string, globalSecurity []openapi.SecurityRequirement, hasGlobalSecurity bool) {
+	switch {
+	case len(op.Security) > 0:
+		analysis.ProtectedEndpoints++
+		addSecuritySchemes(analysis, op.Security, endpoint)
+	case hasGlobalSecurity:
+		analysis.ProtectedEndpoints++
+		addSecuritySchemes(analysis, globalSecurity, endpoint)
+	default:
+		analysis.UnprotectedEndpoints++
+		analysis.EndpointsBySecurity["none"] = append(analysis.EndpointsBySecurity["none"], endpoint)
+	}
+}
+
+// addSecuritySchemes adds security scheme entries for an endpoint
+func addSecuritySchemes(analysis *securityAnalysis, security []openapi.SecurityRequirement, endpoint string) {
+	for _, sec := range security {
+		for schemeName := range sec {
+			analysis.EndpointsBySecurity[schemeName] = append(analysis.EndpointsBySecurity[schemeName], endpoint)
+		}
+	}
 }
