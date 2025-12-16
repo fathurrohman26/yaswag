@@ -19,8 +19,10 @@ YaSwag is a tool for generating OpenAPI 3.x specifications from Go source code u
 - Built-in Swagger UI for serving and visualizing OpenAPI documentation.
 - Built-in Swagger Editor for creating and editing OpenAPI specifications.
 - MCP (Model Context Protocol) server for AI assistant integration with semantic search.
-- Command-line interface (CLI) for generating, validating, formatting, serving, and editing OpenAPI specs.
+- Security audit for analyzing API specifications for security issues.
+- Command-line interface (CLI) for generating, validating, formatting, serving, editing, and auditing OpenAPI specs.
 - Support for API-level metadata, operations, parameters, request bodies, responses, security schemes, and data models.
+- Automatic schema inference from Go struct tags (json tags) with optional `!field` overrides.
 - Easy-to-read and write annotation syntax with `!` prefix.
 
 ### Supported OpenAPI Versions
@@ -65,6 +67,7 @@ yaswag format   - Formats your OpenAPI specification file.
 yaswag serve    - Serves the OpenAPI documentation via Swagger UI.
 yaswag editor   - Launch Swagger Editor for creating/editing specifications.
 yaswag mcp      - Start MCP server for AI assistant integration.
+yaswag audit    - Perform security audit on OpenAPI specification.
 yaswag help     - Displays help information about YaSwag commands.
 yaswag version  - Displays the current version of YaSwag.
 ```
@@ -195,6 +198,77 @@ Add to your `.claude/settings.json`:
 | `list_tags` | List all tags with endpoint counts |
 | `analyze_security` | Analyze security requirements |
 
+### Audit (Security Analysis)
+
+YaSwag includes a security audit command that analyzes your OpenAPI specification for common security issues and best practices violations.
+
+```bash
+# audit an OpenAPI specification (text output)
+yaswag audit --input ./swagger.yaml
+
+# audit with JSON output
+yaswag audit --input ./swagger.yaml --format json
+
+# audit from URL
+yaswag audit --input https://example.com/openapi.json
+
+# audit from stdin (pipe from generate)
+yaswag generate --source ./path/to/your/project | yaswag audit
+
+# pipe any OpenAPI spec to audit
+cat swagger.yaml | yaswag audit
+```
+
+#### Security Rules
+
+| Rule | Severity | Description |
+|------|----------|-------------|
+| `UNPROTECTED_WRITE` | WARNING | POST/PUT/DELETE/PATCH endpoints without security requirements |
+| `API_KEY_IN_QUERY` | WARNING | API keys passed in query parameters (should use headers) |
+| `OAUTH_HTTP` | ERROR | OAuth URLs using HTTP instead of HTTPS |
+| `DEPRECATED_NO_SECURITY` | INFO | Deprecated endpoints without security requirements |
+| `SCOPE_NOT_DEFINED` | WARNING | OAuth scopes used but not defined in security scheme |
+
+#### Exit Codes
+
+- `0` - No ERROR-level issues found
+- `1` - ERROR-level issues found
+
+#### Sample Output
+
+```bash
+Security Audit Report
+=====================
+
+Summary
+-------
+Total Endpoints: 10
+Protected: 8 (80%)
+Unprotected: 2 (20%)
+
+Findings (2 issues)
+-------------------
+
+[WARNING] UNPROTECTED_WRITE - Unprotected write operation
+  Location: POST /users
+  Message: POST endpoint has no security requirement
+  Recommendation: Add authentication/authorization requirement to protect write operations
+
+[WARNING] API_KEY_IN_QUERY - API key in query parameter
+  Location: SecurityScheme 'apiKeyQuery'
+  Message: API key 'apiKeyQuery' is passed in query parameter
+  Recommendation: Use header-based API key for better security (prevents logging in URLs)
+
+Security Schemes
+----------------
+- bearerAuth (http): 8 endpoints
+
+Coverage by Tag
+---------------
+- users: 4/5 protected (80%)
+- products: 4/5 protected (80%)
+```
+
 ### Help
 
 ```bash
@@ -208,6 +282,7 @@ yaswag format --help
 yaswag serve --help
 yaswag editor --help
 yaswag mcp --help
+yaswag audit --help
 
 # show version
 yaswag version
@@ -281,20 +356,21 @@ func GetUserByID() {}
 
 ### Schema Annotations
 
-Define your models with `!model` and field annotations:
+Define your models with `!model`. Field annotations (`!field`) are **optional** - YaSwag automatically infers schema from Go struct tags:
 
 ```go
 // User represents a user of the system.
 // !model "A user of the system"
 type User struct {
-    // !field id:integer "The unique identifier of the user" required example=123
-    ID int `json:"id"`
+    ID    int    `json:"id"`              // Auto: required (no omitempty), type inferred as integer
+    Name  string `json:"name"`            // Auto: required, type inferred as string
+    Email string `json:"email,omitempty"` // Auto: optional (has omitempty)
 
-    // !field name:string "The name of the user" required example="John Doe"
-    Name string `json:"name"`
+    // Use !field to add descriptions, examples, or override inferred values
+    // !field "User's age in years" example=25
+    Age int `json:"age,omitempty"`
 
-    // !field email:string "The email address of the user" example="john@example.com"
-    Email string `json:"email,omitempty"`
+    Internal string `json:"-"` // Excluded from schema (json:"-")
 }
 
 // ErrorResponse represents a standard error response.
@@ -375,7 +451,20 @@ type ErrorResponse struct {
 | Annotation | Syntax | Description |
 |------------|--------|-------------|
 | `!model` | `!model "Description"` | Mark a struct as an OpenAPI schema |
-| `!field` | `!field name:type "Description" required example=value` | Describe a field in the schema |
+| `!field` | `!field name:type "Description" required example=value` | (Optional) Describe a field in the schema |
+
+#### Schema Inference Rules
+
+Fields are automatically inferred from Go struct tags:
+
+| Condition | Result |
+|-----------|--------|
+| `json:"fieldName"` | Field included, name from tag, **required** |
+| `json:"fieldName,omitempty"` | Field included, name from tag, **optional** |
+| `json:"-"` | Field **excluded** from schema |
+| No json tag | Field included with Go field name |
+| Inline comment (non-`!` prefix) | Used as field description |
+| `!field` annotation | Overrides inferred values |
 
 ### Types
 
