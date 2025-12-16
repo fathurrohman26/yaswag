@@ -95,8 +95,7 @@ func (p *Parser) ParseDir(dir string) error {
 		if info.IsDir() {
 			name := info.Name()
 			// Don't skip the root directory itself
-			cleanPath := filepath.Clean(path)
-			if cleanPath != root {
+			if path != root {
 				// Skip vendor, hidden directories, and testdata
 				if name == "vendor" || name == "testdata" || strings.HasPrefix(name, ".") {
 					return filepath.SkipDir
