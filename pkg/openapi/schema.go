@@ -132,6 +132,25 @@ func (s SchemaType) MarshalYAML() (interface{}, error) {
 	return []string(s), nil
 }
 
+// UnmarshalYAML implements yaml.Unmarshaler.
+// Handles both string (OpenAPI 3.0) and array (OpenAPI 3.1+) formats.
+func (s *SchemaType) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	// Try string first (OpenAPI 3.0 format)
+	var str string
+	if err := unmarshal(&str); err == nil {
+		*s = SchemaType{str}
+		return nil
+	}
+
+	// Try array (OpenAPI 3.1+ format)
+	var arr []string
+	if err := unmarshal(&arr); err != nil {
+		return err
+	}
+	*s = arr
+	return nil
+}
+
 // Discriminator is used when request bodies or response payloads may be one of a number of different schemas.
 // https://spec.openapis.org/oas/v3.1.0#discriminator-object
 type Discriminator struct {

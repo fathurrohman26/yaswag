@@ -8,11 +8,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"gopkg.in/yaml.v3"
 
 	"github.com/fathurrohman26/yaswag/pkg/openapi"
 	"github.com/fathurrohman26/yaswag/pkg/validator"
@@ -248,12 +250,14 @@ func (s *Server) registerTools() {
 func (s *Server) loadSpec() (*openapi.Document, error) {
 	var data []byte
 	var err error
+	var specPath string
 
 	// Use in-memory data if available (from stdin)
 	if len(s.specData) > 0 {
 		data = s.specData
 	} else if len(s.specPaths) > 0 {
-		data, err = os.ReadFile(s.specPaths[0])
+		specPath = s.specPaths[0]
+		data, err = os.ReadFile(specPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read spec: %w", err)
 		}
@@ -262,7 +266,22 @@ func (s *Server) loadSpec() (*openapi.Document, error) {
 	}
 
 	var doc openapi.Document
-	if err := json.Unmarshal(data, &doc); err != nil {
+
+	// Detect format by file extension
+	isYAML := false
+	if specPath != "" {
+		ext := strings.ToLower(filepath.Ext(specPath))
+		isYAML = ext == ".yaml" || ext == ".yml"
+	}
+
+	// Parse based on format
+	if isYAML {
+		err = yaml.Unmarshal(data, &doc)
+	} else {
+		err = json.Unmarshal(data, &doc)
+	}
+
+	if err != nil {
 		return nil, fmt.Errorf("failed to parse spec: %w", err)
 	}
 

@@ -148,26 +148,37 @@
       `;
 
             // Initialize Swagger Editor
-            function initEditor(spec) {
+            function initEditor(specContent) {
               window.editor = SwaggerEditorBundle({
-                spec: spec,
                 dom_id: '#swagger-editor',
                 layout: 'StandaloneLayout',
                 presets: [SwaggerEditorStandalonePreset]
               });
+              
+              // Set the spec content after initialization
+              if (specContent && window.editor) {
+                // Wait for editor to be ready, then set content
+                setTimeout(() => {
+                  if (window.editor.specActions) {
+                    window.editor.specActions.updateSpec(specContent);
+                  }
+                }, 100);
+              }
             }
 
             // Load spec based on mode
             {{if .HasSpec}}
             // Edit mode: fetch existing spec from server
             fetch('/spec')
-              .then(response => response.text())
+              .then(response => {
+                return response.text();
+              })
               .then(spec => {
                 initEditor(spec);
               })
               .catch(err => {
-                console.error('Failed to load spec:', err);
                 // Fallback to default spec on error
+                console.error('Failed to load spec:', err);
                 initEditor(defaultSpec);
               });
             {{else}}

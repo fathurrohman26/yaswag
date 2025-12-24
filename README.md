@@ -169,7 +169,28 @@ yaswag mcp --skip-validation ./swagger.yaml
 
 #### Claude Code Configuration
 
-Add to your `.claude/settings.json`:
+To use YaSwag MCP with Claude Code, add the server using the `claude mcp add` command:
+
+```bash
+# Add YaSwag MCP server
+claude mcp add --transport stdio yaswag -- yaswag mcp /path/to/your/openapi.yaml
+
+# Or with absolute paths
+claude mcp add --transport stdio yaswag -- \
+  /absolute/path/to/yaswag mcp /absolute/path/to/openapi.yaml
+
+# List configured servers
+claude mcp list
+
+# Remove server
+claude mcp remove yaswag
+```
+
+After adding the server, restart Claude Code to load the configuration.
+
+#### Claude Desktop Configuration
+
+For Claude Desktop, add to your `~/.config/Claude/claude_desktop_config.json`:
 
 ```json
 {
@@ -184,19 +205,19 @@ Add to your `.claude/settings.json`:
 
 #### Available MCP Tools
 
-| Tool | Description |
-|------|-------------|
+| Tool               | Description                                 |
+| ------------------ | ------------------------------------------- |
 | `search_endpoints` | Search for endpoints using natural language |
-| `list_endpoints` | List all endpoints with optional filtering |
-| `get_endpoint` | Get detailed endpoint information |
-| `search_schemas` | Search for schema definitions |
-| `get_schema` | Get detailed schema definition |
-| `validate_spec` | Validate the OpenAPI specification |
-| `get_spec_info` | Get general specification information |
-| `generate_example` | Generate example request/response data |
-| `find_related` | Find related endpoints |
-| `list_tags` | List all tags with endpoint counts |
-| `analyze_security` | Analyze security requirements |
+| `list_endpoints`   | List all endpoints with optional filtering  |
+| `get_endpoint`     | Get detailed endpoint information           |
+| `search_schemas`   | Search for schema definitions               |
+| `get_schema`       | Get detailed schema definition              |
+| `validate_spec`    | Validate the OpenAPI specification          |
+| `get_spec_info`    | Get general specification information       |
+| `generate_example` | Generate example request/response data      |
+| `find_related`     | Find related endpoints                      |
+| `list_tags`        | List all tags with endpoint counts          |
+| `analyze_security` | Analyze security requirements               |
 
 ### Audit (Security Analysis)
 
